@@ -1,6 +1,7 @@
 package com.milesight.beaveriot.integrations.camthinkaiinference.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.milesight.beaveriot.base.enums.ErrorCode;
 import com.milesight.beaveriot.base.exception.ServiceException;
 import com.milesight.beaveriot.base.utils.JsonUtils;
 import com.milesight.beaveriot.context.api.DeviceServiceProvider;
@@ -161,6 +162,25 @@ public class CamThinkAiInferenceService {
     @EventSubscribe(payloadKeyExpression = Constants.INTEGRATION_ID + ".integration.refresh_models")
     public void refreshModels(Event<CamThinkAiInferenceServiceEntities.RefreshModels> event) {
         initModels();
+    }
+
+    @SuppressWarnings("unused")
+    @EventSubscribe(payloadKeyExpression = Constants.INTEGRATION_ID + ".integration.draw_result_image.*")
+    public EventResponse drawResultImage(Event<CamThinkAiInferenceServiceEntities.DrawResultImage> event) {
+        try {
+            String imageBase64 = event.getPayload().getImageBase64();
+            String camThinkModelInferResponseJson = event.getPayload().getCamthinkInferResponseJson();
+            CamThinkModelInferResponse camThinkModelInferResponse = JsonUtils.fromJSON(camThinkModelInferResponseJson, CamThinkModelInferResponse.class);
+            String resultImageBase64 = drawResultImage(imageBase64, camThinkModelInferResponse);
+            return getEventResponse(Map.of("result_image_base64", resultImageBase64));
+        } catch (Exception e) {
+            log.error("drawResultImage error:", e);
+            if (e instanceof ServiceException) {
+                throw (ServiceException) e;
+            } else {
+                throw ServiceException.with(ErrorCode.SERVER_ERROR.getErrorCode(), e.getMessage()).build();
+            }
+        }
     }
 
     @SuppressWarnings("unused")
@@ -401,8 +421,8 @@ public class CamThinkAiInferenceService {
         return String.format("%s:%.2f", cls, conf);
     }
 
-    private static EventResponse getEventResponse(ModelInferResponse modelInferResponse) {
-        Map<String, Object> response = JsonUtils.toMap(modelInferResponse);
+    private static EventResponse getEventResponse(Object responseObj) {
+        Map<String, Object> response = JsonUtils.toMap(responseObj);
         EventResponse eventResponse = EventResponse.empty();
         for (Map.Entry<String, Object> entry : response.entrySet()) {
             String key = entry.getKey();
