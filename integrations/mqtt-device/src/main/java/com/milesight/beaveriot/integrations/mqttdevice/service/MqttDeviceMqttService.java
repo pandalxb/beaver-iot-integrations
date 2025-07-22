@@ -10,6 +10,7 @@ import com.milesight.beaveriot.context.integration.model.Device;
 import com.milesight.beaveriot.context.integration.model.ExchangePayload;
 import com.milesight.beaveriot.context.model.response.DeviceTemplateInputResult;
 import com.milesight.beaveriot.integrations.mqttdevice.support.DataCenter;
+import com.milesight.beaveriot.integrations.mqttdevice.support.DeviceStatusManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -29,13 +30,15 @@ public class MqttDeviceMqttService {
     private final DeviceTemplateParserProvider deviceTemplateParserProvider;
     private final DeviceServiceProvider deviceServiceProvider;
     private final EntityValueServiceProvider entityValueServiceProvider;
+    private final DeviceStatusManager deviceStatusManager;
     private final ExecutorService jsonDataHandleService;
 
-    public MqttDeviceMqttService(MqttPubSubServiceProvider mqttPubSubServiceProvider, DeviceTemplateParserProvider deviceTemplateParserProvider, DeviceServiceProvider deviceServiceProvider, EntityValueServiceProvider entityValueServiceProvider) {
+    public MqttDeviceMqttService(MqttPubSubServiceProvider mqttPubSubServiceProvider, DeviceTemplateParserProvider deviceTemplateParserProvider, DeviceServiceProvider deviceServiceProvider, EntityValueServiceProvider entityValueServiceProvider, DeviceStatusManager deviceStatusManager) {
         this.mqttPubSubServiceProvider = mqttPubSubServiceProvider;
         this.deviceTemplateParserProvider = deviceTemplateParserProvider;
         this.deviceServiceProvider = deviceServiceProvider;
         this.entityValueServiceProvider = entityValueServiceProvider;
+        this.deviceStatusManager = deviceStatusManager;
         this.jsonDataHandleService = Executors.newCachedThreadPool();
     }
 
@@ -56,6 +59,7 @@ public class MqttDeviceMqttService {
                         deviceServiceProvider.save(device);
                         if (payload != null) {
                             entityValueServiceProvider.saveValuesAndPublishAsync(payload);
+                            deviceStatusManager.dataUploaded(device, payload, 300);
                         }
                     }
                 });
@@ -68,5 +72,6 @@ public class MqttDeviceMqttService {
     public void unsubscribe() {
         mqttPubSubServiceProvider.unsubscribe(DataCenter.INTEGRATION_ID + "/#");
         jsonDataHandleService.shutdown();
+        deviceStatusManager.destroy();
     }
 }

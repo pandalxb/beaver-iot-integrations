@@ -4,6 +4,7 @@ import com.milesight.beaveriot.context.integration.bootstrap.IntegrationBootstra
 import com.milesight.beaveriot.context.integration.model.Integration;
 import com.milesight.beaveriot.integrations.mqttdevice.service.MqttDeviceMqttService;
 import com.milesight.beaveriot.integrations.mqttdevice.service.MqttDeviceService;
+import com.milesight.beaveriot.integrations.mqttdevice.support.DeviceStatusManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -16,10 +17,12 @@ import org.springframework.stereotype.Component;
 public class MqttDeviceBootstrap implements IntegrationBootstrap {
     private final MqttDeviceMqttService mqttDeviceMqttService;
     private final MqttDeviceService mqttDeviceService;
+    private final DeviceStatusManager deviceStatusManager;
 
-    public MqttDeviceBootstrap(MqttDeviceMqttService mqttDeviceMqttService, MqttDeviceService mqttDeviceService) {
+    public MqttDeviceBootstrap(MqttDeviceMqttService mqttDeviceMqttService, MqttDeviceService mqttDeviceService, DeviceStatusManager deviceStatusManager) {
         this.mqttDeviceMqttService = mqttDeviceMqttService;
         this.mqttDeviceService = mqttDeviceService;
+        this.deviceStatusManager = deviceStatusManager;
     }
 
     @Override
@@ -51,6 +54,7 @@ public class MqttDeviceBootstrap implements IntegrationBootstrap {
 
     @Override
     public void onEnabled(String tenantId, Integration integrationConfig) {
+        deviceStatusManager.register(integrationConfig.getId());
         mqttDeviceService.syncTemplates();
         IntegrationBootstrap.super.onEnabled(tenantId, integrationConfig);
     }
