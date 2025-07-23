@@ -59,7 +59,7 @@ public class MqttDeviceMqttService {
                         deviceServiceProvider.save(device);
                         if (payload != null) {
                             entityValueServiceProvider.saveValuesAndPublishAsync(payload);
-                            deviceStatusManager.dataUploaded(device, payload, 300);
+                            deviceStatusManager.dataUploaded(device, payload);
                         }
                     }
                 });

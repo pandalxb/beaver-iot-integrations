@@ -15,24 +15,30 @@ import org.springframework.util.CollectionUtils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.*;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 /**
  * author: Luxb
  * create: 2025/7/21 14:46
  **/
+@SuppressWarnings("unused")
 @Component
 public class DeviceStatusManager {
     private static final String IDENTIFIER_DEVICE_STATUS = "device_status";
     private static final String NAME_DEVICE_STATUS = "Device status";
     private static final String STATUS_VALUE_ONLINE = "Online";
     private static final String STATUS_VALUE_OFFLINE = "Offline";
+    private static final long DEFAULT_OFFLINE_SECONDS = 300;
     private final DeviceServiceProvider deviceServiceProvider;
     private final EntityServiceProvider entityServiceProvider;
     private final EntityValueServiceProvider entityValueServiceProvider;
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors() * 2);
     private final Map<String, ScheduledFuture<?>> deviceTimerFutures = new ConcurrentHashMap<>();
-    private final Map<String, UpdateDeviceStatusFunction> integrationUpdateDeviceStatusFunctions = new ConcurrentHashMap<>();
+    private final Map<String, DeviceStatusConfig> integrationDeviceStatusConfigs = new ConcurrentHashMap<>();
 
     public DeviceStatusManager(DeviceServiceProvider deviceServiceProvider, EntityServiceProvider entityServiceProvider, EntityValueServiceProvider entityValueServiceProvider) {
         this.deviceServiceProvider = deviceServiceProvider;
@@ -41,29 +47,44 @@ public class DeviceStatusManager {
     }
 
     public void register(String integrationId) {
-        integrationUpdateDeviceStatusFunctions.put(integrationId,
-                UpdateDeviceStatusFunction.of(this::updateDeviceStatusToOnline, this::updateDeviceStatusToOffline));
-        init(integrationId);
+        register(integrationId, null, null, null);
     }
 
-    public void register(String integrationId, DeviceStatusOnlineUpdater updateDeviceStatusToOnlineFunction, DeviceStatusOfflineUpdater updateDeviceStatusToOfflineFunction) {
-        integrationUpdateDeviceStatusFunctions.put(integrationId,
-                UpdateDeviceStatusFunction.of(updateDeviceStatusToOnlineFunction, updateDeviceStatusToOfflineFunction));
-        init(integrationId);
+    public void register(String integrationId, BiConsumer<Device, ExchangePayload> onlineUpdater, Consumer<Device> offlineUpdater, Function<Device, Long> offlineSecondsFetcher) {
+        if (onlineUpdater == null) {
+            onlineUpdater = this::updateDeviceStatusToOnline;
+        }
+        if (offlineUpdater == null) {
+            offlineUpdater = this::updateDeviceStatusToOffline;
+        }
+        if (offlineSecondsFetcher == null) {
+            offlineSecondsFetcher = this::getDeviceOfflineSeconds;
+        }
+        DeviceStatusConfig config = DeviceStatusConfig.of(onlineUpdater, offlineUpdater, offlineSecondsFetcher);
+        integrationDeviceStatusConfigs.put(integrationId, config);
+        initDevices(integrationId, config);
     }
 
-    public void init(String integrationId) {
-        UpdateDeviceStatusFunction updateDeviceStatusFunction = integrationUpdateDeviceStatusFunctions.get(integrationId);
+    private void initDevices(String integrationId, DeviceStatusConfig config) {
         List<Device> devices = deviceServiceProvider.findAll(integrationId);
-        if (updateDeviceStatusFunction != null && !CollectionUtils.isEmpty(devices)) {
-            devices.forEach(device -> startOfflineCountdown(device, 300));
+        if (config != null && !CollectionUtils.isEmpty(devices)) {
+            Function<Device, Long> offlineSecondsFetcher = config.getOfflineSecondsFetcher();
+            devices.forEach(device -> {
+                long offlineSeconds = Optional.ofNullable(offlineSecondsFetcher)
+                        .map(f -> f.apply(device))
+                        .orElse(DEFAULT_OFFLINE_SECONDS);
+                startOfflineCountdown(device, offlineSeconds);
+            });
         }
     }
 
-    public void dataUploaded(Device device, ExchangePayload payload, long offlineSeconds) {
+    public void dataUploaded(Device device, ExchangePayload payload) {
         cancelOfflineCountdown(device);
-        UpdateDeviceStatusFunction updateDeviceStatusFunction = integrationUpdateDeviceStatusFunctions.get(device.getIntegrationId());
-        updateDeviceStatusFunction.getUpdateDeviceStatusToOnlineFunction().update(device, payload);
+        DeviceStatusConfig config = integrationDeviceStatusConfigs.get(device.getIntegrationId());
+        config.getOnlineUpdater().accept(device, payload);
+        long offlineSeconds = Optional.ofNullable(config.getOfflineSecondsFetcher())
+                .map(f -> f.apply(device))
+                .orElse(DEFAULT_OFFLINE_SECONDS);
         startOfflineCountdown(device, offlineSeconds);
     }
 
@@ -77,9 +98,9 @@ public class DeviceStatusManager {
             return;
         }
 
-        UpdateDeviceStatusFunction updateDeviceStatusFunction = integrationUpdateDeviceStatusFunctions.get(device.getIntegrationId());
+        DeviceStatusConfig deviceStatusConfig = integrationDeviceStatusConfigs.get(device.getIntegrationId());
         ScheduledFuture<?> future = scheduler.schedule(() -> {
-            updateDeviceStatusFunction.getUpdateDeviceStatusToOfflineFunction().update(device);
+            deviceStatusConfig.getOfflineUpdater().accept(device);
             deviceTimerFutures.remove(device.getKey());
         }, offlineSeconds, TimeUnit.SECONDS);
         deviceTimerFutures.put(device.getKey(), future);
@@ -91,6 +112,10 @@ public class DeviceStatusManager {
 
     private void updateDeviceStatusToOffline(Device device) {
         updateDeviceStatus(device, STATUS_VALUE_OFFLINE);
+    }
+
+    private long getDeviceOfflineSeconds(Device device) {
+        return DEFAULT_OFFLINE_SECONDS;
     }
 
     private void cancelOfflineCountdown(Device device) {
@@ -118,25 +143,17 @@ public class DeviceStatusManager {
     }
 
     @Data
-    public static class UpdateDeviceStatusFunction {
-        private DeviceStatusOnlineUpdater updateDeviceStatusToOnlineFunction;
-        private DeviceStatusOfflineUpdater updateDeviceStatusToOfflineFunction;
+    public static class DeviceStatusConfig {
+        private BiConsumer<Device, ExchangePayload> onlineUpdater;
+        private Consumer<Device> offlineUpdater;
+        private Function<Device, Long> offlineSecondsFetcher;
 
-        public static UpdateDeviceStatusFunction of(DeviceStatusOnlineUpdater onlineUpdater, DeviceStatusOfflineUpdater offlineUpdater) {
-            UpdateDeviceStatusFunction function = new UpdateDeviceStatusFunction();
-            function.setUpdateDeviceStatusToOnlineFunction(onlineUpdater);
-            function.setUpdateDeviceStatusToOfflineFunction(offlineUpdater);
-            return function;
+        public static DeviceStatusConfig of(BiConsumer<Device, ExchangePayload> onlineUpdater, Consumer<Device> offlineUpdater, Function<Device, Long> offlineSecondsFetcher) {
+            DeviceStatusConfig config = new DeviceStatusConfig();
+            config.setOnlineUpdater(onlineUpdater);
+            config.setOfflineUpdater(offlineUpdater);
+            config.setOfflineSecondsFetcher(offlineSecondsFetcher);
+            return config;
         }
-    }
-
-    @FunctionalInterface
-    public interface DeviceStatusOnlineUpdater {
-        void update(Device device, ExchangePayload payload);
-    }
-
-    @FunctionalInterface
-    public interface DeviceStatusOfflineUpdater {
-        void update(Device device);
     }
 }
