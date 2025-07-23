@@ -9,6 +9,7 @@ import com.milesight.beaveriot.context.integration.model.Device;
 import com.milesight.beaveriot.context.integration.model.Entity;
 import com.milesight.beaveriot.context.integration.model.EntityBuilder;
 import com.milesight.beaveriot.context.integration.model.ExchangePayload;
+import jakarta.annotation.PreDestroy;
 import lombok.Data;
 import org.springframework.stereotype.Component;
 import org.springframework.util.CollectionUtils;
@@ -46,10 +47,26 @@ public class DeviceStatusManager {
         this.entityValueServiceProvider = entityValueServiceProvider;
     }
 
+    /**
+     * Registers an integration with the device status manager.
+     *
+     * @param integrationId the ID of the integration
+     */
     public void register(String integrationId) {
         register(integrationId, null, null, null);
     }
 
+    /**
+     * Registers an integration with the device status manager.
+     *
+     * @param integrationId         the ID of the integration
+     * @param onlineUpdater         a {@link BiConsumer} that updates device status when the device is online
+     *                              (e.g., setting the device's entity "status" to "online")
+     * @param offlineUpdater        a {@link Consumer} that updates device status when the device is offline
+     *                              (e.g., setting the device's entity "status" to "offline")
+     * @param offlineSecondsFetcher a {@link Function} that returns the offline timeout in seconds for a given device
+     *                              (e.g., returning a fixed value or calculating based on device)
+     */
     public void register(String integrationId, BiConsumer<Device, ExchangePayload> onlineUpdater, Consumer<Device> offlineUpdater, Function<Device, Long> offlineSecondsFetcher) {
         if (onlineUpdater == null) {
             onlineUpdater = this::updateDeviceStatusToOnline;
@@ -65,6 +82,28 @@ public class DeviceStatusManager {
         initDevices(integrationId, config);
     }
 
+    /**
+     * Callback invoked when the device has successfully uploaded data.
+     *
+     * @param device  the device that uploaded the data
+     * @param payload the exchange payload containing the uploaded data
+     */
+    public void dataUploaded(Device device, ExchangePayload payload) {
+        cancelOfflineCountdown(device);
+        DeviceStatusConfig config = integrationDeviceStatusConfigs.get(device.getIntegrationId());
+        config.getOnlineUpdater().accept(device, payload);
+        long offlineSeconds = Optional.ofNullable(config.getOfflineSecondsFetcher())
+                .map(f -> f.apply(device))
+                .orElse(DEFAULT_OFFLINE_SECONDS);
+        startOfflineCountdown(device, offlineSeconds);
+    }
+
+    @PreDestroy
+    private void destroy() {
+        deviceTimerFutures.values().forEach(future -> future.cancel(true));
+        scheduler.shutdown();
+    }
+
     private void initDevices(String integrationId, DeviceStatusConfig config) {
         List<Device> devices = deviceServiceProvider.findAll(integrationId);
         if (config != null && !CollectionUtils.isEmpty(devices)) {
@@ -76,21 +115,6 @@ public class DeviceStatusManager {
                 startOfflineCountdown(device, offlineSeconds);
             });
         }
-    }
-
-    public void dataUploaded(Device device, ExchangePayload payload) {
-        cancelOfflineCountdown(device);
-        DeviceStatusConfig config = integrationDeviceStatusConfigs.get(device.getIntegrationId());
-        config.getOnlineUpdater().accept(device, payload);
-        long offlineSeconds = Optional.ofNullable(config.getOfflineSecondsFetcher())
-                .map(f -> f.apply(device))
-                .orElse(DEFAULT_OFFLINE_SECONDS);
-        startOfflineCountdown(device, offlineSeconds);
-    }
-
-    public void destroy() {
-        deviceTimerFutures.values().forEach(future -> future.cancel(true));
-        scheduler.shutdown();
     }
 
     private void startOfflineCountdown(Device device, long offlineSeconds) {

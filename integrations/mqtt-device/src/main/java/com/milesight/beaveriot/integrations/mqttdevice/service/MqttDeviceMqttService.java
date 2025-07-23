@@ -72,6 +72,5 @@ public class MqttDeviceMqttService {
     public void unsubscribe() {
         mqttPubSubServiceProvider.unsubscribe(DataCenter.INTEGRATION_ID + "/#");
         jsonDataHandleService.shutdown();
-        deviceStatusManager.destroy();
     }
 }
