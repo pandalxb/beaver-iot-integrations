@@ -15,6 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
+import org.springframework.util.CollectionUtils;
 
 import java.text.MessageFormat;
 import java.util.Map;
@@ -33,12 +34,37 @@ public class CamThinkAiInferenceClient {
         return Map.of("X-Access-Token", config.getToken());
     }
 
+    public boolean testConnection() {
+        try {
+            CamThinkModelListResponse camThinkModelListResponse = testGetModels();
+            if (camThinkModelListResponse == null) {
+                throw ServiceException.with(ServerErrorCode.SERVER_NOT_REACHABLE.getErrorCode(), ServerErrorCode.SERVER_NOT_REACHABLE.getErrorMessage()).build();
+            }
+
+            if (CollectionUtils.isEmpty(camThinkModelListResponse.getData())) {
+                throw ServiceException.with(ServerErrorCode.SERVER_NOT_REACHABLE.getErrorCode(), ServerErrorCode.SERVER_NOT_REACHABLE.getErrorMessage()).build();
+            }
+        } catch (Exception e) {
+            log.warn("[Not reachable]" + e.getMessage());
+            return false;
+        }
+        return true;
+    }
+
+    public CamThinkModelListResponse testGetModels() {
+        return getModels(1, 10, false);
+    }
+
     public CamThinkModelListResponse getModels() {
+        return getModels(1, 9999, true);
+    }
+
+    public CamThinkModelListResponse getModels(int page, int pageSize, boolean isUpdateApiStatus) {
         String url = config.getModelsUrl();
-        String params = "page=1&page_size=9999";
+        String params = "page=" + page + "&page_size=" + pageSize;
         url = url + "?" + params;
         ClientResponse clientResponse = OkHttpUtil.get(url, getCommonHeaders());
-        validateResponse(clientResponse, true);
+        validateResponse(clientResponse, Config.URL_MODELS, isUpdateApiStatus);
         try {
             return JsonUtils.fromJSON(clientResponse.getData(), CamThinkModelListResponse.class);
         } catch (Exception e) {
@@ -51,7 +77,7 @@ public class CamThinkAiInferenceClient {
         String url = config.getModelDetailUrl();
         url = MessageFormat.format(url, modelId);
         ClientResponse clientResponse = OkHttpUtil.get(url, getCommonHeaders());
-        validateResponse(clientResponse, false);
+        validateResponse(clientResponse, Config.URL_MODEL_DETAIL, false);
         try {
             return JsonUtils.fromJSON(clientResponse.getData(), CamThinkModelDetailResponse.class);
         } catch (Exception e) {
@@ -64,7 +90,7 @@ public class CamThinkAiInferenceClient {
         String url = config.getModelInferUrl();
         url = MessageFormat.format(url, modelId);
         ClientResponse clientResponse = OkHttpUtil.post(url, getCommonHeaders(), JsonUtils.toJSON(camThinkModelInferRequest));
-        validateResponse(clientResponse, false);
+        validateResponse(clientResponse, Config.URL_MODEL_INFER, false);
         try {
             return JsonUtils.fromJSON(clientResponse.getData(), CamThinkModelInferResponse.class);
         } catch (Exception e) {
@@ -73,10 +99,10 @@ public class CamThinkAiInferenceClient {
         }
     }
 
-    private void validateResponse(ClientResponse clientResponse, boolean isUpdateApiStatus) {
+    private void validateResponse(ClientResponse clientResponse, String uri, boolean isUpdateApiStatus) {
         try {
             if (!clientResponse.isSuccessful() || clientResponse.getData() == null) {
-                throw buildServiceException(clientResponse);
+                throw buildServiceException(clientResponse, uri);
             }
         } catch (ServiceException e) {
             if (isUpdateApiStatus) {
@@ -87,7 +113,7 @@ public class CamThinkAiInferenceClient {
         }
     }
 
-    private ServiceException buildServiceException(ClientResponse clientResponse) {
+    private ServiceException buildServiceException(ClientResponse clientResponse, String uri) {
         int code = clientResponse.getCode();
         ServiceException exception;
         String detailMessage = "";
@@ -111,6 +137,8 @@ public class CamThinkAiInferenceClient {
         } else if (code == HttpStatus.NOT_FOUND.value()) {
             if (camThinkResponse != null && CamThinkErrorCode.TOKEN_NOT_FOUND.getValue().equals(camThinkResponse.getErrorCode())) {
                 exception = buildServiceException(ServerErrorCode.SERVER_TOKEN_INVALID, detailMessage);
+            } else if (Config.URL_MODELS.equals(uri)) {
+                exception = buildServiceException(ServerErrorCode.SERVER_NOT_REACHABLE, detailMessage);
             } else {
                 exception = buildServiceException(ServerErrorCode.SERVER_DATA_NOT_FOUND, detailMessage);
             }
@@ -138,26 +166,5 @@ public class CamThinkAiInferenceClient {
             builder.detailMessage(detailMessage);
         }
         return builder.build();
-    }
-
-    public boolean testConnection() {
-        String baseUrl = config.getBaseUrl();
-        boolean apiStatus;
-        try {
-            apiStatus = validBaseUrl(baseUrl);
-        } catch (Exception e) {
-            log.warn("[Not reachable]: " + baseUrl);
-            apiStatus = false;
-        }
-        return apiStatus;
-    }
-
-    private boolean validBaseUrl(String url) {
-        try {
-            ClientResponse clientResponse = OkHttpUtil.get(url, getCommonHeaders());
-            return clientResponse != null && clientResponse.isSuccessful();
-        } catch (Exception e) {
-            return false;
-        }
     }
 }
