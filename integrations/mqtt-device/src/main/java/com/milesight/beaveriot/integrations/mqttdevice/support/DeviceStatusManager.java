@@ -29,8 +29,8 @@ import java.util.function.Function;
 @SuppressWarnings("unused")
 @Component
 public class DeviceStatusManager {
-    private static final String IDENTIFIER_DEVICE_STATUS = "device_status";
-    private static final String NAME_DEVICE_STATUS = "Device status";
+    private static final String IDENTIFIER_DEVICE_STATUS = "status";
+    private static final String NAME_DEVICE_STATUS = "Status";
     private static final String STATUS_VALUE_ONLINE = "Online";
     private static final String STATUS_VALUE_OFFLINE = "Offline";
     private static final long DEFAULT_OFFLINE_SECONDS = 300;
@@ -53,7 +53,18 @@ public class DeviceStatusManager {
      * @param integrationId the ID of the integration
      */
     public void register(String integrationId) {
-        register(integrationId, null, null, null);
+        register(integrationId, null);
+    }
+
+    /**
+     * Registers an integration with the device status manager.
+     *
+     * @param integrationId         the ID of the integration
+     * @param offlineSecondsFetcher a {@link Function} that returns the offline timeout in seconds for a given device
+     *                              (e.g., returning a fixed value or calculating based on device)
+     */
+    public void register(String integrationId, Function<Device, Long> offlineSecondsFetcher) {
+        register(integrationId, null, null, offlineSecondsFetcher);
     }
 
     /**
@@ -98,6 +109,14 @@ public class DeviceStatusManager {
         startOfflineCountdown(device, offlineSeconds);
     }
 
+    public void updateDeviceStatusToOnline(Device device) {
+        updateDeviceStatus(device, STATUS_VALUE_ONLINE);
+    }
+
+    public void updateDeviceStatusToOffline(Device device) {
+        updateDeviceStatus(device, STATUS_VALUE_OFFLINE);
+    }
+
     @PreDestroy
     private void destroy() {
         deviceTimerFutures.values().forEach(future -> future.cancel(true));
@@ -132,10 +151,6 @@ public class DeviceStatusManager {
 
     private void updateDeviceStatusToOnline(Device device, ExchangePayload payload) {
         updateDeviceStatus(device, STATUS_VALUE_ONLINE);
-    }
-
-    private void updateDeviceStatusToOffline(Device device) {
-        updateDeviceStatus(device, STATUS_VALUE_OFFLINE);
     }
 
     private long getDeviceOfflineSeconds(Device device) {
